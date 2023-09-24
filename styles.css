@@ -6,3 +6,17 @@ available in the app when your plugin is enabled.
 If your plugin does not need CSS, delete this file.
 
 */
+
+.nx-settings {
+  margin: 2rem 0;
+}
+
+.nx-settings .nx-setting_group {
+  margin: 2rem 0;
+}
+
+.nx-settings .nx-setting_group_title {
+  margin: 1rem 0;
+  font-size: 1.5rem;
+  font-weight: 500;
+}
