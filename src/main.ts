@@ -1,25 +1,16 @@
-import { CachedMetadata, Editor, MarkdownView, Notice, Plugin, TFile } from 'obsidian';
-import { dirname } from 'path';
+import { Notice, Plugin } from 'obsidian';
 import NextraPublishSettingTab, { NextraPublishSettings, DEFAULT_SETTINGS } from './setting';
-import { uploadGithub } from './utils/publish';
-import { isDirectory } from './utils/path';
-
-interface PublishData {
-  path: string;
-  message: string;
-  content: Buffer | string;
-}
-
-interface MarkdownFileWithMetadata extends TFile {
-  metadata: CachedMetadata | null;
-  content: string;
-}
+import Publisher, { PublishData } from './components/publisher';
 
 export default class NextraPublishPlugin extends Plugin {
   settings: NextraPublishSettings;
 
+  publisher: Publisher;
+
   async onload() {
     await this.loadSettings();
+
+    this.publisher = new Publisher(this.app.vault, this.app.metadataCache, this.settings);
 
     // This creates an icon in the left ribbon.
     // const ribbonIconEl = this.addRibbonIcon('dice', 'Sample Plugin', (evt: MouseEvent) => {
@@ -54,43 +45,42 @@ export default class NextraPublishPlugin extends Plugin {
     await this.saveData(this.settings);
   }
 
-  async getAllMarkdowns(): Promise<MarkdownFileWithMetadata[]> {
-    const { vault, metadataCache } = this.app;
-    const mdFiles = await Promise.all(
-      vault.getMarkdownFiles().map(async (file) => ({
-        ...file,
-        content: await vault.cachedRead(file),
-        metadata: metadataCache.getFileCache(file),
-      })),
-    );
-
-    return mdFiles;
-  }
-
-  private async handlePublishAllNotes(editor: Editor, view: MarkdownView) {
+  async handlePublishAllNotes() {
     if (!this.settings?.userName || !this.settings?.githubToken || !this.settings?.repositoryName) {
       new Notice('❌ Github Authentication info is required!');
       return;
     }
 
-    const { publishFontmatterKey } = this.settings;
-
-    const mdForPublish = (await this.getAllMarkdowns()).filter(
-      (file) => file.metadata?.frontmatter?.[publishFontmatterKey],
-    );
+    const mdForPublish = await this.publisher.getAllMarkdownsForPublish();
 
     const publishList: PublishData[] = [];
 
-    mdForPublish.forEach((markdown) => {
-      const path = encodeURI(markdown.path.replace(' ', '_'));
-      publishList.push({
-        path,
-        message: `Upload File: ${markdown.name}`,
-        content: markdown.content,
-      });
-    });
+    await Promise.all(
+      mdForPublish.map(async (markdown) => {
+        const images = await this.publisher.getPublishImages(markdown);
 
-    const nextraMetaMap = this.generateNextraMetadata(mdForPublish);
+        let content = String(markdown.content);
+        // eslint-disable-next-line no-restricted-syntax
+        for (const image of images) {
+          content = content.replace(image.original, image.imageMarkdown);
+          publishList.push({
+            path: image.uploadPath,
+            message: `Upload Image: ${image.name}`,
+            content: image.imageBinary,
+          });
+        }
+
+        publishList.push({
+          path: encodeURI(markdown.path),
+          message: `Upload File: ${markdown.name}`,
+          content,
+        });
+      }),
+    );
+
+    console.log(mdForPublish);
+
+    const nextraMetaMap = this.publisher.generateNextraMetadata(mdForPublish);
     Object.entries(nextraMetaMap).forEach(([key, value]) => {
       publishList.push({
         path: key,
@@ -100,31 +90,11 @@ export default class NextraPublishPlugin extends Plugin {
     });
 
     console.log({ publishList });
-    this.publish(publishList);
-  }
 
-  private publish(publishList: PublishData[]) {
-    if (!this.settings?.userName || !this.settings?.githubToken || !this.settings?.repositoryName) {
-      new Notice('❌ Github Authentication info is required!');
-      return;
-    }
-    const { userName, githubToken, repositoryName } = this.settings;
-
-    let published = 0;
     const statusBarItemEl = this.addStatusBarItem();
-    const updateStatusBar = (n: number) =>
-      statusBarItemEl.setText(`Publishing to github: ${n}/${publishList.length}`);
+    this.publisher.publish(publishList, (published) => {
+      statusBarItemEl.setText(`Publishing to github: ${published}/${publishList.length}`);
 
-    publishList.forEach(async (publish) => {
-      // const path = encodeURI(publish.path);
-      await uploadGithub({
-        auth: githubToken,
-        owner: userName,
-        repo: repositoryName,
-        ...publish,
-      });
-
-      updateStatusBar((published += 1));
       if (published === publishList.length) {
         new Notice(`${published} has published`);
         setTimeout(() => {
@@ -132,37 +102,5 @@ export default class NextraPublishPlugin extends Plugin {
         }, 2000);
       }
     });
-  }
-
-  private generateNextraMetadata(markdownFiles: MarkdownFileWithMetadata[]) {
-    const nextraMetaMap: { [key: string]: { [key: string]: string } } = {};
-
-    markdownFiles.forEach((markdown) => {
-      const ROOT_PATH = '';
-      const childName = markdown.path.split('/').at(0)?.replace('.md', '');
-      const path = `_meta.json`;
-      if (nextraMetaMap[ROOT_PATH] === undefined) nextraMetaMap[path] = {};
-      if (childName) nextraMetaMap[path][encodeURI(childName)] = childName;
-    });
-
-    markdownFiles.forEach((markdown) => {
-      markdown.path.split('/').forEach((name, idx, arr) => {
-        const currentPath = arr.filter((_, i) => i <= idx).join('/');
-        if (!isDirectory(currentPath)) return;
-
-        const childs = markdownFiles.filter((md) => md.path.startsWith(currentPath));
-        const childNames = childs.map(
-          (child) => child.path.replace(`${currentPath}/`, '').split('/').at(0)?.replace('.md', ''),
-        );
-
-        childNames.forEach((childName) => {
-          const path = `${encodeURI(currentPath)}/_meta.json`;
-          if (nextraMetaMap[currentPath] === undefined) nextraMetaMap[path] = {};
-          if (childName) nextraMetaMap[path][encodeURI(childName)] = childName;
-        });
-      });
-    });
-
-    return nextraMetaMap;
   }
 }
