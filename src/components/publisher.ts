@@ -1,22 +1,21 @@
-import {
-  CachedMetadata,
-  Editor,
-  MarkdownView,
-  MetadataCache,
-  Notice,
-  TFile,
-  Vault,
-  getLinkpath,
-} from 'obsidian';
+import { CachedMetadata, MetadataCache, Notice, TFile, Vault, getLinkpath } from 'obsidian';
 import { Octokit } from 'octokit';
 import { NextraPublishSettings } from 'src/setting';
-import { isDirectory } from '../utils/path';
-import { arrayBufferToBase64, toBuffer } from '../utils/buffer';
+import { join, normalize, resolve } from 'path';
+import { convertToUploadPath, isDirectory } from '../utils/path';
+import { toBuffer } from '../utils/buffer';
+
+export enum PublishType {
+  MarkDown,
+  Image,
+  NextraMetadata,
+}
 
 export interface PublishData {
   path: string;
   message: string;
   content: Buffer | string;
+  type: PublishType;
 }
 
 interface ImageInfo {
@@ -34,6 +33,7 @@ interface UploadGithubArgs {
   path: string;
   message: string;
   content: Buffer | string;
+  branch: string;
 }
 
 export interface MarkdownFileWithMetadata extends TFile {
@@ -62,7 +62,8 @@ export default class Publisher {
     return mdFiles.filter((file) => file.metadata?.frontmatter?.[publishFontmatterKey]);
   }
 
-  async uploadGithub({ auth, owner, repo, path, message, content }: UploadGithubArgs) {
+  async uploadGithub({ auth, owner, repo, path, message, content, branch }: UploadGithubArgs) {
+    console.log({ path });
     const octokit = new Octokit({ auth });
 
     const existContent = await octokit.rest.repos
@@ -81,36 +82,38 @@ export default class Publisher {
       path,
       content: base64Content,
       message,
+      branch,
       sha: (existContent?.data as any)?.sha,
     });
 
     return response;
   }
 
-  generateNextraMetadata(markdownFiles: MarkdownFileWithMetadata[]) {
-    const nextraMetaMap: { [key: string]: { [key: string]: string } } = {};
+  generateNextraMetadata(publishList: PublishData[]) {
+    const nextraMetaMap: Record<string, Record<string, string>> = {};
+    const filteredList = publishList.filter((publish) => publish.type === PublishType.MarkDown);
 
-    markdownFiles.forEach((markdown) => {
-      const ROOT_PATH = '';
+    filteredList.forEach((markdown) => {
       const childName = markdown.path.split('/').at(0)?.replace('.md', '');
-      const path = `_meta.json`;
-      if (nextraMetaMap[ROOT_PATH] === undefined) nextraMetaMap[path] = {};
+      const path = '_meta.json';
+      if (nextraMetaMap[path] === undefined) nextraMetaMap[path] = {};
       if (childName) nextraMetaMap[path][encodeURI(childName)] = childName;
     });
 
-    markdownFiles.forEach((markdown) => {
+    filteredList.forEach((markdown) => {
       markdown.path.split('/').forEach((name, idx, arr) => {
         const currentPath = arr.filter((_, i) => i <= idx).join('/');
         if (!isDirectory(currentPath)) return;
 
-        const childs = markdownFiles.filter((md) => md.path.startsWith(currentPath));
+        const childs = filteredList.filter((md) => md.path.startsWith(currentPath));
         const childNames = childs.map(
           (child) => child.path.replace(`${currentPath}/`, '').split('/').at(0)?.replace('.md', ''),
         );
+        console.log({ currentPath, childNames });
 
         childNames.forEach((childName) => {
-          const path = `${encodeURI(currentPath)}/_meta.json`;
-          if (nextraMetaMap[currentPath] === undefined) nextraMetaMap[path] = {};
+          const path = `${currentPath}/_meta.json`;
+          if (nextraMetaMap[path] === undefined) nextraMetaMap[path] = {};
           if (childName) nextraMetaMap[path][encodeURI(childName)] = childName;
         });
       });
@@ -124,6 +127,45 @@ export default class Publisher {
     return customName ?? file.name;
   }
 
+  async getAllFilesAtGithub() {
+    if (!this.settings?.userName || !this.settings?.githubToken || !this.settings?.repositoryName) {
+      new Notice('❌ Github Authentication info is required!');
+      throw new Error('Github Authentication info is required');
+    }
+    const { userName, githubToken, repositoryName } = this.settings;
+
+    const octokit = new Octokit({ auth: githubToken });
+
+    const response = await octokit.rest.git.getTree({
+      owner: userName,
+      repo: repositoryName,
+      tree_sha: 'HEAD',
+      recursive: String(Math.ceil(Math.random() * 1000)),
+    });
+
+    return response.data.tree
+      .filter((file) => file.type === 'blob' && file.path && file.sha)
+      .map((file) => ({ path: String(file.path), sha: String(file.sha) }));
+  }
+
+  async deleteFileAtGithub(file: { path: string; sha: string }) {
+    if (!this.settings?.userName || !this.settings?.githubToken || !this.settings?.repositoryName) {
+      new Notice('❌ Github Authentication info is required!');
+      throw new Error('Github Authentication info is required');
+    }
+    const { userName, githubToken, repositoryName } = this.settings;
+
+    const octokit = new Octokit({ auth: githubToken });
+
+    await octokit.rest.repos.deleteFile({
+      owner: userName,
+      repo: repositoryName,
+      path: file.path,
+      sha: file.sha,
+      message: `Delete File: ${file.path}`,
+    });
+  }
+
   async getPublishImages(markdownFile: MarkdownFileWithMetadata) {
     const images = await Promise.all(
       markdownFile.metadata?.embeds?.map(async (embed) => {
@@ -133,13 +175,14 @@ export default class Publisher {
 
         const imageBinary = toBuffer(await this.vault.readBinary(linkedFile));
 
-        const uploadPath = encodeURI(`img/${embed.link}`);
-        const imageMarkdown = `![${embed.link}](${uploadPath})`;
-        console.log({ imageMarkdown });
+        const name = embed.link.replaceAll(' ', '_');
+        const uploadPath = `${name}`;
+        const imageMarkdown = `![${embed.link}](/${uploadPath})`;
+        // console.log({ uploadPath });
 
         const imageInfo: ImageInfo = {
           original: embed.original,
-          name: embed.link,
+          name,
           uploadPath,
           imageMarkdown,
           imageBinary,
@@ -152,24 +195,76 @@ export default class Publisher {
     return images.filter((value) => value !== undefined) as ImageInfo[];
   }
 
-  publish(publishList: PublishData[], onPublish?: (published: number) => void) {
+  transformPublishList(publishList: PublishData[]) {
+    const { imagePublishPath, markdownPublishPath } = this.settings;
+
+    return publishList.map(({ path, type, ...publish }) => {
+      let transformedPath = encodeURI(path);
+
+      switch (type) {
+        case PublishType.Image:
+          transformedPath = join(imagePublishPath, path);
+          break;
+        case PublishType.NextraMetadata:
+        case PublishType.MarkDown:
+        default:
+          transformedPath = encodeURI(join(markdownPublishPath, path).replace(/\\/g, '/'));
+      }
+
+      return { path: convertToUploadPath(transformedPath.replace(/\\/g, '/')), type, ...publish };
+    });
+  }
+
+  async publish(publishList: PublishData[], onPublish?: (published: number) => void) {
     if (!this.settings?.userName || !this.settings?.githubToken || !this.settings?.repositoryName) {
       new Notice('❌ Github Authentication info is required!');
       return;
     }
     const { userName, githubToken, repositoryName } = this.settings;
 
+    const octokit = new Octokit({ auth: githubToken });
+    const payload = { owner: userName, repo: repositoryName };
+
+    const mrBranchName = Date.now().toString();
+    const mainBranch = await octokit.rest.git.getRef({ ...payload, ref: `heads/main` });
+    await octokit.rest.git.createRef({
+      ...payload,
+      ref: `refs/heads/${mrBranchName}`,
+      sha: mainBranch.data.object.sha,
+    });
     let published = 0;
 
-    publishList.forEach(async (publish) => {
-      await this.uploadGithub({
-        auth: githubToken,
-        owner: userName,
-        repo: repositoryName,
-        ...publish,
-      });
+    await Promise.all(
+      publishList.map(async ({ path, ...publish }) => {
+        await this.uploadGithub({
+          ...payload,
+          auth: githubToken,
+          path,
+          branch: mrBranchName,
+          ...publish,
+        });
 
-      onPublish?.((published += 1));
+        onPublish?.((published += 1));
+      }),
+    );
+
+    const mergeRequest = await octokit.rest.pulls.create({
+      ...payload,
+      base: 'main',
+      head: mrBranchName,
+      title: `[${mrBranchName}] Obsidian Publish`,
+      body: `This MR is Created by obsidian-nextra-publish Plugin`,
+    });
+
+    await octokit.rest.pulls.merge({
+      ...payload,
+      pull_number: mergeRequest.data.number,
+      commit_title: `[${mrBranchName}] Merge Obsidian Publish`,
+    });
+
+    await octokit.rest.git.deleteRef({
+      ...payload,
+      ref: `heads/${mrBranchName}`,
     });
   }
 }

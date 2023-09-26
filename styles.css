@@ -20,3 +20,16 @@ If your plugin does not need CSS, delete this file.
   font-size: 1.5rem;
   font-weight: 500;
 }
+
+.nx-statusBar {
+  padding: 0 0.5rem;
+  border-radius: 0.25rem;
+}
+
+.nx-statusBar_orange {
+  background: #ff833178;
+}
+
+.nx-statusBar_green {
+  background: #15ff0070;
+}

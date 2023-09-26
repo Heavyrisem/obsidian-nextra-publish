@@ -1,5 +1,6 @@
 const CLASS_PREFIX = 'nx';
 
-const getClassName = (className: string) => [CLASS_PREFIX, className].join('-');
+const getClassName = (...classNames: string[]) =>
+  classNames.map((className) => [CLASS_PREFIX, className].join('-')).join(' ');
 
 export default getClassName;

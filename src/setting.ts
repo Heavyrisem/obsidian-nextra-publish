@@ -7,10 +7,14 @@ export interface NextraPublishSettings {
   userName?: string;
   githubToken?: string;
   publishFontmatterKey: string;
+  imagePublishPath: string;
+  markdownPublishPath: string;
 }
 
 export const DEFAULT_SETTINGS: NextraPublishSettings = {
   publishFontmatterKey: 'nextra-publish',
+  imagePublishPath: '/public',
+  markdownPublishPath: '/pages',
 };
 
 export default class NextraPublishSettingTab extends PluginSettingTab {
@@ -37,10 +41,12 @@ export default class NextraPublishSettingTab extends PluginSettingTab {
     titleEl.className = getClassName('title');
     containerEl.appendChild(titleEl);
 
-    const settingMenuGroups = [this.githubAuthSetting(), this.commonSetting()];
-    settingMenuGroups.forEach((settingMenu) =>
-      containerEl.appendChild(settingMenu),
-    );
+    const settingMenuGroups = [
+      this.githubAuthSetting(),
+      this.commonSetting(),
+      this.publishSetting(),
+    ];
+    settingMenuGroups.forEach((settingMenu) => containerEl.appendChild(settingMenu));
   }
 
   private githubAuthSetting() {
@@ -50,8 +56,7 @@ export default class NextraPublishSettingTab extends PluginSettingTab {
     const statusIconClassName = getClassName('setting_statusIcon');
     const updateValidStatus = () => {
       const { repositoryName, userName, githubToken } = this.plugin.settings;
-      const statusIcon =
-        repositoryName && userName && githubToken ? '✅' : '❌';
+      const statusIcon = repositoryName && userName && githubToken ? '✅' : '❌';
 
       const statusIconEl = document.querySelector(`.${statusIconClassName}`);
       if (statusIconEl) statusIconEl.innerHTML = statusIcon;
@@ -59,9 +64,7 @@ export default class NextraPublishSettingTab extends PluginSettingTab {
       return statusIcon;
     };
 
-    const grouptitle = this.createGroupTitle(
-      `Github Authentication (required)`,
-    );
+    const grouptitle = this.createGroupTitle(`Github Authentication (required)`);
     const statusIconEl = document.createElement('span');
     statusIconEl.innerHTML = updateValidStatus();
     statusIconEl.className = statusIconClassName;
@@ -98,9 +101,7 @@ export default class NextraPublishSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName('Github Access Token')
-      .setDesc(
-        'Access Token for Publish to Github, require repository push permission',
-      )
+      .setDesc('Access Token for Publish to Github, require repository push permission')
       .addText((text) =>
         text
           .setPlaceholder('access token')
@@ -131,6 +132,42 @@ export default class NextraPublishSettingTab extends PluginSettingTab {
           .setValue(this.plugin.settings.publishFontmatterKey)
           .onChange(async (value) => {
             this.plugin.settings.publishFontmatterKey = value;
+            await this.plugin.saveSettings();
+          }),
+      );
+
+    return containerEl;
+  }
+
+  private publishSetting() {
+    const containerEl = document.createElement('div');
+    containerEl.className = getClassName('setting_group');
+
+    const groupTitle = this.createGroupTitle('Publish Settings');
+    containerEl.appendChild(groupTitle);
+
+    new Setting(containerEl)
+      .setName('Image Publish Path')
+      .setDesc('Path for where Image Files Publish')
+      .addText((text) =>
+        text
+          .setPlaceholder('/public')
+          .setValue(this.plugin.settings.imagePublishPath)
+          .onChange(async (value) => {
+            this.plugin.settings.imagePublishPath = value;
+            await this.plugin.saveSettings();
+          }),
+      );
+
+    new Setting(containerEl)
+      .setName('Markdown Publish Path')
+      .setDesc('Path for where Markdown Files Publish')
+      .addText((text) =>
+        text
+          .setPlaceholder('/pages')
+          .setValue(this.plugin.settings.markdownPublishPath)
+          .onChange(async (value) => {
+            this.plugin.settings.markdownPublishPath = value;
             await this.plugin.saveSettings();
           }),
       );

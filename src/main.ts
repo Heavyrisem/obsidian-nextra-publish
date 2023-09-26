@@ -1,6 +1,8 @@
 import { Notice, Plugin } from 'obsidian';
 import NextraPublishSettingTab, { NextraPublishSettings, DEFAULT_SETTINGS } from './setting';
-import Publisher, { PublishData } from './components/publisher';
+import Publisher, { PublishData, PublishType } from './components/publisher';
+import getClassName from './utils/className';
+import { convertToUploadPath } from './utils/path';
 
 export default class NextraPublishPlugin extends Plugin {
   settings: NextraPublishSettings;
@@ -12,19 +14,6 @@ export default class NextraPublishPlugin extends Plugin {
 
     this.publisher = new Publisher(this.app.vault, this.app.metadataCache, this.settings);
 
-    // This creates an icon in the left ribbon.
-    // const ribbonIconEl = this.addRibbonIcon('dice', 'Sample Plugin', (evt: MouseEvent) => {
-    //   // Called when the user clicks the icon.
-    //   new Notice('This is a notice!');
-    // });
-    // Perform additional things with the ribbon
-    // ribbonIconEl.addClass('my-plugin-ribbon-class');
-
-    // This adds a status bar item to the bottom of the app. Does not work on mobile apps.
-    // const statusBarItemEl = this.addStatusBarItem();
-    // statusBarItemEl.setText('Status Bar Text');
-
-    // This adds an editor command that can perform some operation on the current editor instance
     this.addCommand({
       id: 'publish-all-notes-nextra',
       name: 'Publish All Notes to Nextra',
@@ -46,10 +35,10 @@ export default class NextraPublishPlugin extends Plugin {
   }
 
   async handlePublishAllNotes() {
-    if (!this.settings?.userName || !this.settings?.githubToken || !this.settings?.repositoryName) {
-      new Notice('❌ Github Authentication info is required!');
-      return;
-    }
+    console.log('=== PUBLISHING ===');
+
+    const statusBarItemEl = this.addStatusBarItem();
+    statusBarItemEl.innerHTML = 'Collecting Notes Info for Publish...';
 
     const mdForPublish = await this.publisher.getAllMarkdownsForPublish();
 
@@ -62,45 +51,67 @@ export default class NextraPublishPlugin extends Plugin {
         let content = String(markdown.content);
         // eslint-disable-next-line no-restricted-syntax
         for (const image of images) {
-          content = content.replace(image.original, image.imageMarkdown);
-          publishList.push({
-            path: image.uploadPath,
-            message: `Upload Image: ${image.name}`,
-            content: image.imageBinary,
-          });
+          content = content.replaceAll(image.original, image.imageMarkdown);
+
+          const shouldPush = !publishList.some((publish) => publish.path === image.uploadPath);
+          if (shouldPush) {
+            publishList.push({
+              path: image.uploadPath,
+              message: `Upload Image: ${image.name}`,
+              content: image.imageBinary,
+              type: PublishType.Image,
+            });
+          }
         }
 
         publishList.push({
-          path: encodeURI(markdown.path),
+          path: markdown.path,
           message: `Upload File: ${markdown.name}`,
           content,
+          type: PublishType.MarkDown,
         });
       }),
     );
 
-    console.log(mdForPublish);
-
-    const nextraMetaMap = this.publisher.generateNextraMetadata(mdForPublish);
+    const nextraMetaMap = this.publisher.generateNextraMetadata(publishList);
+    console.log({ nextraMetaMap });
     Object.entries(nextraMetaMap).forEach(([key, value]) => {
       publishList.push({
         path: key,
         content: JSON.stringify(value),
         message: `Update MetaJSON: ${key}`,
+        type: PublishType.NextraMetadata,
       });
     });
 
     console.log({ publishList });
+    const trnasformedPublishList = this.publisher.transformPublishList(publishList);
+    console.log({ trnasformedPublishList });
 
-    const statusBarItemEl = this.addStatusBarItem();
-    this.publisher.publish(publishList, (published) => {
-      statusBarItemEl.setText(`Publishing to github: ${published}/${publishList.length}`);
+    const allFilesAtGithub = await this.publisher.getAllFilesAtGithub();
+    // console.log({ allFilesAtGithub });
+    const shouldDeleteFiles = allFilesAtGithub.filter(
+      (file) =>
+        !trnasformedPublishList.some((publishFile) => file.path === publishFile.path) &&
+        (file.path.startsWith(convertToUploadPath(this.settings.imagePublishPath)) ||
+          file.path.startsWith(convertToUploadPath(this.settings.markdownPublishPath))),
+    );
+    await Promise.all(shouldDeleteFiles.map((file) => this.publisher.deleteFileAtGithub(file)));
+    new Notice(`Deleted ${shouldDeleteFiles.length} Files at Github`);
+    console.log({ shouldDeleteFiles });
 
-      if (published === publishList.length) {
-        new Notice(`${published} has published`);
-        setTimeout(() => {
-          statusBarItemEl.remove();
-        }, 2000);
-      }
+    await this.publisher.publish(trnasformedPublishList, (published) => {
+      statusBarItemEl.className = getClassName('statusBar', 'statusBar_orange');
+      statusBarItemEl.setText(
+        `Publishing to github: ${published}/${trnasformedPublishList.length}`,
+      );
     });
+
+    new Notice(`${trnasformedPublishList.length} has published`);
+    statusBarItemEl.className = getClassName('statusBar', 'statusBar_green');
+    statusBarItemEl.innerHTML = `${trnasformedPublishList.length} has published`;
+    setTimeout(() => {
+      statusBarItemEl.remove();
+    }, 2000);
   }
 }
