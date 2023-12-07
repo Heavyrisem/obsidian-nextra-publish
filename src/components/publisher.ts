@@ -2,7 +2,7 @@ import { CachedMetadata, MetadataCache, Notice, TFile, Vault, getLinkpath } from
 import { Octokit } from 'octokit';
 import { NextraPublishSettings } from 'src/setting';
 import { join, normalize, resolve } from 'path';
-import { convertToUploadPath, isDirectory } from '../utils/path';
+import { convertToUploadPath, isDirectory, normalizePath } from '../utils/path';
 import { toBuffer } from '../utils/buffer';
 
 export enum PublishType {
@@ -199,7 +199,7 @@ export default class Publisher {
     const { imagePublishPath, markdownPublishPath } = this.settings;
 
     return publishList.map(({ path, type, ...publish }) => {
-      let transformedPath = encodeURI(path);
+      let transformedPath = normalizePath(path);
 
       switch (type) {
         case PublishType.Image:
@@ -208,7 +208,7 @@ export default class Publisher {
         case PublishType.NextraMetadata:
         case PublishType.MarkDown:
         default:
-          transformedPath = encodeURI(join(markdownPublishPath, path).replace(/\\/g, '/'));
+          transformedPath = normalizePath(join(markdownPublishPath, path).replace(/\\/g, '/'));
       }
 
       return { path: convertToUploadPath(transformedPath.replace(/\\/g, '/')), type, ...publish };
