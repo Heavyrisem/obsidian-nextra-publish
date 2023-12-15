@@ -3,9 +3,15 @@ import NextraPublishPlugin from './main';
 import getClassName from './utils/className';
 
 export interface NextraPublishSettings {
-  repositoryName?: string;
-  userName?: string;
+  githubRepositoryName?: string;
+  githubUserName?: string;
   githubToken?: string;
+
+  gitlabRepositoryID?: string;
+  gitlabToken?: string;
+  gitlabUrl?: string;
+  gitlabBranchName?: string;
+
   publishFontmatterKey: string;
   imagePublishPath: string;
   markdownPublishPath: string;
@@ -43,6 +49,7 @@ export default class NextraPublishSettingTab extends PluginSettingTab {
 
     const settingMenuGroups = [
       this.githubAuthSetting(),
+      this.gitlabAuthSetting(),
       this.commonSetting(),
       this.publishSetting(),
     ];
@@ -53,12 +60,12 @@ export default class NextraPublishSettingTab extends PluginSettingTab {
     const containerEl = document.createElement('div');
     containerEl.className = getClassName('setting_group');
 
-    const statusIconClassName = getClassName('setting_statusIcon');
+    const statusIconClassName = getClassName('setting_statusIcon', 'github');
     const updateValidStatus = () => {
-      const { repositoryName, userName, githubToken } = this.plugin.settings;
-      const statusIcon = repositoryName && userName && githubToken ? '✅' : '❌';
+      const { githubRepositoryName, githubUserName, githubToken } = this.plugin.settings;
+      const statusIcon = githubRepositoryName && githubUserName && githubToken ? '✅' : '❌';
 
-      const statusIconEl = document.querySelector(`.${statusIconClassName}`);
+      const statusIconEl = document.querySelector(`.${statusIconClassName.split(' ').join('.')}`);
       if (statusIconEl) statusIconEl.innerHTML = statusIcon;
 
       return statusIcon;
@@ -77,9 +84,9 @@ export default class NextraPublishSettingTab extends PluginSettingTab {
       .addText((text) =>
         text
           .setPlaceholder('repo name')
-          .setValue(this.plugin.settings.repositoryName ?? '')
+          .setValue(this.plugin.settings.githubRepositoryName ?? '')
           .onChange(async (value) => {
-            this.plugin.settings.repositoryName = value;
+            this.plugin.settings.githubRepositoryName = value;
             updateValidStatus();
             await this.plugin.saveSettings();
           }),
@@ -91,9 +98,9 @@ export default class NextraPublishSettingTab extends PluginSettingTab {
       .addText((text) =>
         text
           .setPlaceholder('username')
-          .setValue(this.plugin.settings.userName ?? '')
+          .setValue(this.plugin.settings.githubUserName ?? '')
           .onChange(async (value) => {
-            this.plugin.settings.userName = value;
+            this.plugin.settings.githubUserName = value;
             updateValidStatus();
             await this.plugin.saveSettings();
           }),
@@ -108,6 +115,88 @@ export default class NextraPublishSettingTab extends PluginSettingTab {
           .setValue(this.plugin.settings?.githubToken ?? '')
           .onChange(async (value) => {
             this.plugin.settings.githubToken = value;
+            updateValidStatus();
+            await this.plugin.saveSettings();
+          }),
+      );
+
+    return containerEl;
+  }
+
+  private gitlabAuthSetting() {
+    const containerEl = document.createElement('div');
+    containerEl.className = getClassName('setting_group');
+
+    const statusIconClassName = getClassName('setting_statusIcon', 'gitlab');
+    console.log({ statusIconClassName });
+    const updateValidStatus = () => {
+      const { gitlabRepositoryID, gitlabToken } = this.plugin.settings;
+      const statusIcon = gitlabRepositoryID && gitlabToken ? '✅' : '❌';
+
+      const statusIconEl = document.querySelector(`.${statusIconClassName.split(' ').join('.')}`);
+      if (statusIconEl) statusIconEl.innerHTML = statusIcon;
+
+      return statusIcon;
+    };
+
+    const grouptitle = this.createGroupTitle(`Gitlab Authentication (required)`);
+    const statusIconEl = document.createElement('span');
+    statusIconEl.innerHTML = updateValidStatus();
+    statusIconEl.className = statusIconClassName;
+    grouptitle.appendChild(statusIconEl);
+    containerEl.appendChild(grouptitle);
+
+    new Setting(containerEl)
+      .setName('Gitlab URL')
+      .setDesc('Gitlab url for connect')
+      .addText((text) =>
+        text
+          .setPlaceholder('https://gitlab.com')
+          .setValue(this.plugin.settings.gitlabUrl ?? '')
+          .onChange(async (value) => {
+            this.plugin.settings.gitlabUrl = value;
+            updateValidStatus();
+            await this.plugin.saveSettings();
+          }),
+      );
+
+    new Setting(containerEl)
+      .setName('Gitlab Repository ID')
+      .setDesc('Gitlab repository id for publish')
+      .addText((text) =>
+        text
+          .setPlaceholder('repo ID')
+          .setValue(this.plugin.settings.gitlabRepositoryID ?? '')
+          .onChange(async (value) => {
+            this.plugin.settings.gitlabRepositoryID = value;
+            updateValidStatus();
+            await this.plugin.saveSettings();
+          }),
+      );
+
+    new Setting(containerEl)
+      .setName('Gitlab Branch Name')
+      .setDesc('Gitlab branch name for publish')
+      .addText((text) =>
+        text
+          .setPlaceholder('master')
+          .setValue(this.plugin.settings.gitlabBranchName ?? '')
+          .onChange(async (value) => {
+            this.plugin.settings.gitlabBranchName = value;
+            updateValidStatus();
+            await this.plugin.saveSettings();
+          }),
+      );
+
+    new Setting(containerEl)
+      .setName('Gitlab Access Token')
+      .setDesc('Access Token for Publish to Gitlab, require repository push permission')
+      .addText((text) =>
+        text
+          .setPlaceholder('access token')
+          .setValue(this.plugin.settings?.gitlabToken ?? '')
+          .onChange(async (value) => {
+            this.plugin.settings.gitlabToken = value;
             updateValidStatus();
             await this.plugin.saveSettings();
           }),

@@ -2,6 +2,7 @@ import { CachedMetadata, MetadataCache, Notice, TFile, Vault, getLinkpath } from
 import { Octokit } from 'octokit';
 import { NextraPublishSettings } from 'src/setting';
 import { join, normalize, resolve } from 'path';
+import { CommitAction, Gitlab } from '@gitbeaker/rest';
 import { convertToUploadPath, isDirectory, normalizePath } from '../utils/path';
 import { toBuffer } from '../utils/buffer';
 
@@ -128,11 +129,19 @@ export default class Publisher {
   }
 
   async getAllFilesAtGithub() {
-    if (!this.settings?.userName || !this.settings?.githubToken || !this.settings?.repositoryName) {
+    if (
+      !this.settings?.githubUserName ||
+      !this.settings?.githubToken ||
+      !this.settings?.githubRepositoryName
+    ) {
       new Notice('❌ Github Authentication info is required!');
       throw new Error('Github Authentication info is required');
     }
-    const { userName, githubToken, repositoryName } = this.settings;
+    const {
+      githubUserName: userName,
+      githubToken,
+      githubRepositoryName: repositoryName,
+    } = this.settings;
 
     const octokit = new Octokit({ auth: githubToken });
 
@@ -149,11 +158,19 @@ export default class Publisher {
   }
 
   async deleteFileAtGithub(file: { path: string; sha: string }) {
-    if (!this.settings?.userName || !this.settings?.githubToken || !this.settings?.repositoryName) {
+    if (
+      !this.settings?.githubUserName ||
+      !this.settings?.githubToken ||
+      !this.settings?.githubRepositoryName
+    ) {
       new Notice('❌ Github Authentication info is required!');
       throw new Error('Github Authentication info is required');
     }
-    const { userName, githubToken, repositoryName } = this.settings;
+    const {
+      githubUserName: userName,
+      githubToken,
+      githubRepositoryName: repositoryName,
+    } = this.settings;
 
     const octokit = new Octokit({ auth: githubToken });
 
@@ -215,15 +232,19 @@ export default class Publisher {
     });
   }
 
-  async publish(publishList: PublishData[], onPublish?: (published: number) => void) {
-    if (!this.settings?.userName || !this.settings?.githubToken || !this.settings?.repositoryName) {
+  async publishToGithub(publishList: PublishData[], onPublish?: (published: number) => void) {
+    if (
+      !this.settings?.githubUserName ||
+      !this.settings?.githubToken ||
+      !this.settings?.githubRepositoryName
+    ) {
       new Notice('❌ Github Authentication info is required!');
       return;
     }
-    const { userName, githubToken, repositoryName } = this.settings;
+    const { githubUserName, githubToken, githubRepositoryName } = this.settings;
 
     const octokit = new Octokit({ auth: githubToken });
-    const payload = { owner: userName, repo: repositoryName };
+    const payload = { owner: githubUserName, repo: githubRepositoryName };
 
     const mrBranchName = Date.now().toString();
     const mainBranch = await octokit.rest.git.getRef({ ...payload, ref: `heads/main` });
@@ -266,5 +287,67 @@ export default class Publisher {
       ...payload,
       ref: `heads/${mrBranchName}`,
     });
+  }
+
+  async publishToGitlab(publishList: PublishData[], deleteFiles = false) {
+    if (!this.settings?.gitlabRepositoryID || !this.settings?.gitlabToken) {
+      new Notice('❌ Gitlab Authentication info is required!');
+      return;
+    }
+    const {
+      gitlabRepositoryID,
+      gitlabToken,
+      gitlabUrl,
+      gitlabBranchName,
+      markdownPublishPath,
+      imagePublishPath,
+    } = this.settings;
+
+    const api = new Gitlab({
+      host: gitlabUrl ?? '',
+      token: gitlabToken,
+    });
+
+    const gitlabFiles = await api.Repositories.allRepositoryTrees(gitlabRepositoryID, {
+      ref: gitlabBranchName ?? 'master',
+      recursive: true,
+    }).then((res) => res.filter((data) => data.type !== 'tree'));
+    const shouldDeleteFiles = gitlabFiles.filter(
+      (gitlabFile) => !publishList.some((publishData) => publishData.path === gitlabFile.path),
+    );
+
+    const actions: CommitAction[] = publishList.map((publishData) => {
+      const isExistAtGitlab = gitlabFiles.some(
+        (gitlabFile) => publishData.path === gitlabFile.path,
+      );
+
+      return {
+        action: isExistAtGitlab ? ('update' as const) : ('create' as const),
+        filePath: publishData.path,
+        content:
+          publishData.type === PublishType.Image
+            ? publishData.content.toString('base64')
+            : publishData.content.toString(),
+        encoding: publishData.type === PublishType.Image ? 'base64' : 'text',
+      };
+    });
+
+    if (deleteFiles) {
+      actions.push(
+        ...shouldDeleteFiles
+          .filter(
+            (file) =>
+              file.path.startsWith(markdownPublishPath) || file.path.startsWith(imagePublishPath),
+          )
+          .map((file) => ({ action: 'delete' as const, filePath: file.path })),
+      );
+    }
+
+    await api.Commits.create(
+      gitlabRepositoryID,
+      gitlabBranchName ?? 'master',
+      `[${Date.now()}] Obsidian Publish`,
+      actions,
+    );
   }
 }
